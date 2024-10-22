@@ -1,4 +1,60 @@
 # 视觉跟踪使用说明
+
+## 2024.10.22更新说明
+#### 1.程序开头处添加了根据机器类型设置观测点offset的功能，该功能用于区分不同机器的零位，使得用户无需手动区分不同机型的观测姿态
+
+    type = mc.get_system_version()
+    offset_j5 = 0
+    if type > 2:
+        offset_j5 = -90
+        print("280")
+    else:
+        print("320")
+
+#### 可以看到观测姿态增加了offset
+
+    self.origin_mycbot_horizontal = [42.36, -35.85, -52.91, 88.59, -42.62+offset_j5, 0.0]
+    self.origin_mycbot_level = [-90, 5, -104, 14, 90 + offset_j5, 0]
+
+#### 2.优化了视觉跟踪的初始姿态，新的观测姿态不再临近奇异点
+
+#### 3.优化了手眼标定
+
+1)优化了手眼标定接口中的识别逻辑，从识别三次修改为了识别五次
+
+    tbe = np.vstack([tbe1, tbe2, tbe3, tbe4, tbe5])
+    Mc = np.vstack([Mc1, Mc2, Mc3, Mc4, Mc5])
+
+2)增加了手眼矩阵的**验证**环节，现在标定结束后会再识别一次用于验证
+
+    for i in range(1, r):
+        for j in range(3):
+            err = abs(pos[i][j] - pos[0][j])
+            if(err > 10):
+                state = False
+                print("matrix error")
+
+3）在手眼矩阵中设置了300mm的**工具偏移**，用于跟踪时保持相机和物体的距离，无需再手动对target_coords进行偏移
+
+    self.IDENTIFY_LEN = 300 #to keep identify length
+    tce[2] -= self.IDENTIFY_LEN #用于保持识别距离
+
+#### 4.新增ids识别功能，在视觉跟踪时会对编号为0的stag码进行跟踪，识别到编号1的stag时会回到初始观测姿态
+
+    while 1:
+        _ ,ids = self.stag_identify()
+        if ids[0] == 0:
+            ml.send_coords(target_coords, 30)  # 机械臂移动到二维码前方
+            # time.sleep(0.5)
+        elif ids[0] == 1:
+            ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
+
+
+**5.优化了部分代码逻辑，对重复调用的部分进行了封装**
+
+    pose, tbe, Mc, state = self.Matrix_identify(ml)
+
+
 ### 1 使用前准备
 #### 1.1 Python依赖库
 使用pip安装以下Python库
@@ -13,16 +69,23 @@
 
     pip install pymycobot
 
+**以下版本确认可用**
 
+    stag-python         1.0.1
+    opencv-python       4.8.1.78
+    scipy               1.11.4
+    numpy               1.26.2
+    pymycobot           3.6.0
 #### 1.2 Stag码
 本文使用stag码用作二维码跟踪
  <div align=center><img src="resources\stag.png" width="20%" ></div>
+
 **建议使用彩印，黑白打印识别率较低**
 
 下载地址如下：
     https://drive.google.com/drive/folders/0ByNTNYCAhWbILXd2SE5FY1c3WXM?resourcekey=0-nWeENtNZql2j9AF32Ud8sQ
 
-    stag码的左上角为编号，使用opencv的stag识别库可以识别该编号，你可以为不同编号设计不同的行为逻辑，比如00设为位置跟踪，01设为姿态跟踪，02设为回到观测点。
+    stag码的左上角为编号，使用opencv的stag识别库可以识别该编号，你可以为不同编号设计不同的行为逻辑，比如00设为位置跟踪，01设为回到观测点，02设为姿态跟踪。
 
 #### 1.2 相机初始化
 在本项目的camera_detect.py文件中定义了名为camera_detect的视觉识别类
@@ -92,7 +155,8 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
 
 此时机械臂会先运动到观测姿态
 
-    self.origin_mycbot_level = [0, 5, -104, 14, 0, 0]
+    self.origin_mycbot_level = [-90, 5, -104, 14, 90 + offset_j5, 0]
+    
     def Eyes_in_hand_calibration(self, ml):
         ml.send_angles(self.origin_mycbot_level, 50)  # 移动到观测点
 
@@ -104,7 +168,10 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
 
 若相机识别到stag码，则会自动进入下一步识别，机械臂移动并捕捉机械臂和相机的位置信息
 
-完毕后终端会弹出提示，输入任意键后机械臂会放松，根据提示移动机械臂末端至贴紧二维码（详细可见视频）
+在移动并识别的过程中，程序会自动对照当前储存的手眼矩阵文件，如果识别结果趋于一致，则会弹出**Calibration Complete EyesInHand_matrix**表示标定完毕
+#### 如果你希望标定一组新的手眼矩阵参数，可在标定前删除EyesInHand_matrix.json文件！
+
+当为弹出**matrix error**的提示，表示需要进行手眼标定，终端会弹出提示，输入任意键后机械臂会放松，根据提示移动机械臂末端至贴紧二维码（详细可见视频）
 
     input("Move the end of the robot arm to the calibration point, press any key to release servo")
 
@@ -112,11 +179,15 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
 
     input("focus servo and get current coords")
 
-此时会打印EyesInHand_matrix信息，视为标定完成
+此时会打印**save successe, wait to verify**信息，程序将自动进入验证环节
+
+
+**验证环节**: 完成标定后机械臂会回到手眼标定的观测姿态，此时会重复识别并验证标定参数是否正确，请保证stag码仍然在相机视野内，此时若显示"matrix error"则表示验证未通过，需用重新运行标定程序！
 
 **标定完成后手眼矩阵会以EyesInHand_matrix.json的形式储存，标定成功后无需重复操作！**
 
-### 注意：手眼标定可能会由于操作不当、机器虚位等原因出现误差，当视觉跟踪效果不好时，需要重新手眼标定
+
+#### 注意：手眼标定可能会由于操作不当、机器虚位等原因出现误差，当视觉跟踪效果不好时，需要重新手眼标定!
 
 ### 3 视觉跟踪
 
@@ -125,14 +196,13 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
 <video controls src="视觉跟踪.mp4" title="
 "></video>
 
-
 完成了手眼标定后，使用vision_trace_loop接口即可以进行视觉跟踪
 
     m.vision_trace_loop(mc) #视觉跟踪
 
 调用该函数后会机械臂会运动到观测点
 
-    self.origin_mycbot_horizontal = [0,60,-60,0,0,0]
+    self.origin_mycbot_horizontal = [42.36, -35.85, -52.91, 88.59, -42.62+offset_j5, 0.0]
     ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
 
 用户可自行修改观测点
@@ -143,26 +213,36 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
 
         ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
         self.wait()
-        time.sleep(1)
         origin = ml.get_coords()
         while origin is None:
             origin = ml.get_coords()
+        time.sleep(1)
         while 1:
-            self.camera.update_frame()  # 刷新相机界面
-            frame = self.camera.color_frame()  # 获取当前帧
-            cv2.imshow("按下键盘任意键退出", frame)
+            _ ,ids = self.stag_identify()
+            if ids[0] == 0:
+                self.camera.update_frame()  # 刷新相机界面
+                frame = self.camera.color_frame()  # 获取当前帧
+                cv2.imshow("按下键盘任意键退出", frame)
 
-            target_coords = self.stag_robot_identify(ml)
-            target_coords[0] -= 300
-            self.coord_limit(target_coords)
+                target_coords,_ = self.stag_robot_identify(ml)
+                self.coord_limit(target_coords)
+                print(target_coords)
+                for i in range(3):
+                    target_coords[i+3] = origin[i+3]
+                ml.send_coords(target_coords, 30)  # 机械臂移动到二维码前方
+                # time.sleep(0.5)
+            elif ids[0] == 1:
+                ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
+
+**_ ,ids = self.stag_identify()**
+
+此处识别了stag码的ids编号，并针对不同的编号设置了不同的行为逻辑，其中0表示跟踪，1表示回到观测姿态
 
 **target_coords = self.stag_robot_identify(ml)**
 
 target_coords是计算出的基于机械臂坐标系的stag码坐标
 
-**target_coords[0] -= 300**
-
-这里对坐标的x轴减去了300mm，意味着机械臂将运动到距离stag码300mm的位置，如果修改了观测点的姿态，此处也需同步修改！
+由于我们在手眼矩阵中添加了300mm的**工具偏移**，此时计算得到的target_coords与物体的实际位置存在300mm的偏差，该偏差有助于保持相机的观测距离
 
 **self.coord_limit(target_coords)**
 

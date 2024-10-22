@@ -7,7 +7,15 @@ import time
 from marker_utils import *
 from scipy.linalg import svd
 from pymycobot import *
-mc = MyCobot("COM8")  # 设置端口
+mc = MyCobot320("COM31")  # 设置端口
+type = mc.get_system_version()
+offset_j5 = 0
+if type > 2:
+    offset_j5 = -90
+    print("280")
+else:
+    print("320")
+
             
 np.set_printoptions(suppress=True, formatter={'float_kind': '{:.2f}'.format})
 
@@ -23,8 +31,9 @@ class camera_detect:
         self.camera = UVCCamera(self.camera_id, self.mtx, self.dist)
         self.camera_open()
 
-        self.origin_mycbot_horizontal = [0,60,-60,0,0,0]
-        self.origin_mycbot_level = [0, 5, -104, 14, 0, 0]
+        self.origin_mycbot_horizontal = [42.36, -35.85, -52.91, 88.59, -42.62+offset_j5, 0.0]
+        self.origin_mycbot_level = [-90, 5, -104, 14, 90 + offset_j5, 0]
+        self.IDENTIFY_LEN = 300 #to keep identify length
    
         # Initialize EyesInHand_matrix to None or load from a document if available
         self.EyesInHand_matrix = None
@@ -51,8 +60,8 @@ class camera_detect:
         
 
     def coord_limit(self, coords):
-        min_coord = [-100, -200, 300]
-        max_coord = [400, 200, 600]
+        min_coord = [-350, -350, 300]
+        max_coord = [350, 350, 500]
         for i in range(3):
             if(coords[i] < min_coord[i]):
                 coords[i] = min_coord[i]
@@ -78,7 +87,7 @@ class camera_detect:
         return target_coords
 
     def stag_robot_identify(self, ml):
-        marker_pos_pack = self.stag_identify()
+        marker_pos_pack,ids = self.stag_identify()
         target_coords = ml.get_coords() # 获取机械臂当前坐标
         while (target_coords is None):
             target_coords = ml.get_coords()
@@ -90,7 +99,7 @@ class camera_detect:
         for i in range(3):
             target_coords[i] = fact_bcl[i]
         
-        return target_coords
+        return target_coords,ids
 
     def stag_robot_identify_loop(self, ml):
         while 1:
@@ -102,7 +111,7 @@ class camera_detect:
             if cv2.waitKey(1) & 0xFF != 255:
                 break
 
-            marker_pos_pack = self.stag_identify()
+            marker_pos_pack,_ = self.stag_identify()
             target_coords = ml.get_coords() # 获取机械臂当前坐标
             while (target_coords is None):
                 target_coords = ml.get_coords()
@@ -145,33 +154,35 @@ class camera_detect:
         ptrRotationMatrix[2, 2] = ptrCosAngle[1] * ptrCosAngle[0]
         return ptrRotationMatrix
     
-    def eyes_in_hand_calculate(self, pose, tbe1, Mc1, tbe2, Mc2, tbe3, Mc3, Mr):
-
-        tbe1, Mc1, tbe2, Mc2, tbe3, Mc3, Mr = map(np.array, [tbe1, Mc1, tbe2, Mc2, tbe3, Mc3, Mr])
-        # Convert pose from degrees to radians
-        euler = np.array(pose) * np.pi / 180
+    def eyes_in_hand_calculate(self, pose, tbe, Mc, Mr):
+        pose,Mr =  map(np.array, [pose,Mr])
+        # 将角度从度数转换为弧度
+        euler = pose * np.pi / 180
         Rbe = self.CvtEulerAngleToRotationMatrix(euler)
-        print("Rbe", Rbe)
         Reb = Rbe.T
+
+        A = np.empty((3, 0))
+        b_comb = np.empty((3, 0))
         
-        A = np.hstack([(Mc2 - Mc1).reshape(-1, 1), 
-                    (Mc3 - Mc1).reshape(-1, 1), 
-                    (Mc3 - Mc2).reshape(-1, 1)])
+        r = tbe.shape[0]
         
-        b = Reb @ np.hstack([(tbe1 - tbe2).reshape(-1, 1), 
-                            (tbe1 - tbe3).reshape(-1, 1), 
-                            (tbe2 - tbe3).reshape(-1, 1)])
+        for i in range(1, r):
+            A = np.hstack((A, (Mc[i, :].reshape(3, 1) - Mc[0, :].reshape(3, 1))))
+            b_comb = np.hstack((b_comb, (tbe[0, :].reshape(3, 1) - tbe[i, :].reshape(3, 1))))
         
-        print("A = ", A)
-        print("B = ", b)
-        U, S, Vt = svd(A @ b.T)
+        b = Reb @ b_comb
+        U, _, Vt = svd(A @ b.T)
         Rce = Vt.T @ U.T
         
-        tce = Reb @ (Mr - (1/3)*(tbe1 + tbe2 + tbe3) - (1/3)*(Rbe @ Rce @ (Mc1 + Mc2 + Mc3)))
+        tbe_sum = np.sum(tbe, axis=0)
+        Mc_sum = np.sum(Mc, axis=0)
         
-        eyes_in_hand_matrix = np.vstack([np.hstack([Rce, tce.reshape(-1, 1)]), np.array([0, 0, 0, 1])])
-        
-        return eyes_in_hand_matrix
+        tce = Reb @ (Mr.reshape(3, 1) - (1/r) * tbe_sum.reshape(3, 1) - (1/r) * (Rbe @ Rce @ Mc_sum.reshape(3, 1)))
+        tce[2] -= self.IDENTIFY_LEN #用于保持识别距离
+
+        EyesInHand_matrix = np.vstack((np.hstack((Rce, tce)), np.array([0, 0, 0, 1])))
+        print("EyesInHand_matrix = ", EyesInHand_matrix)
+        return EyesInHand_matrix
     
     # 坐标转换为齐次变换矩阵，（x,y,z,rx,ry,rz）单位rad
     def Transformation_matrix(self,coord):
@@ -211,9 +222,9 @@ class camera_detect:
         (corners, ids, rejected_corners) = stag.detectMarkers(frame, 11)  # 获取画面中二维码的角度和id
         marker_pos_pack = self.calc_markers_base_position(corners, ids)  # 获取物的坐标(相机系)
         if(len(marker_pos_pack) == 0):
-            marker_pos_pack = self.stag_identify()
+            marker_pos_pack, ids = self.stag_identify()
         # print("Camera coords = ", marker_pos_pack)
-        return marker_pos_pack
+        return marker_pos_pack, ids
 
     # 读取Camera坐标（循环）
     def stag_identify_loop(self):
@@ -222,14 +233,31 @@ class camera_detect:
             frame = self.camera.color_frame()  # 获取当前帧
             (corners, ids, rejected_corners) = stag.detectMarkers(frame, 11)  # 获取画面中二维码的角度和id
             marker_pos_pack = self.calc_markers_base_position(corners, ids)  # 获取物的坐标(相机系)
-            print("Camera coords = ", marker_pos_pack)
+            print("Camera coords = ", marker_pos_pack, ids)
             cv2.imshow("按下键盘任意键退出", frame)
             # cv2.waitKey(1)
             # 按下键盘任意键退出
             if cv2.waitKey(1) & 0xFF != 255:
                 break
 
-    def Eyes_in_hand_calibration(self, ml):
+    def Test(self):
+        pose = [-173.58, 0.0, -179.64]
+        tbe1 =  np.array([-87.80, -207.50, 236.70])
+        Mc1 =  np.array([48.47, -7.54, 178.45])
+        tbe2 =  np.array([-36.40, -209.00, 237.90])
+        Mc2 =  np.array([50.77, -56.50 ,178.21])
+        tbe3 =  np.array([-36.50, -208.80, 253.30])
+        Mc3 =  np.array([49.81, -55.38, 194.22])
+        tbe4 =  np.array([-36.40, -187.40, 258.90])
+        Mc4 =  np.array([36.50, -58.00, 202.12])
+        tbe5 =  np.array([-66.70, -186.10, 257.30])
+        Mc5 =  np.array([31.82, -28.74, 199.48])
+        Mr = [-96.7, -168.3, 42.8]
+        tbe = np.vstack([tbe1, tbe2, tbe3, tbe4, tbe5])
+        Mc = np.vstack([Mc1, Mc2, Mc3, Mc4, Mc5])
+        self.EyesInHand_matrix = self.eyes_in_hand_calculate(pose, tbe, Mc, Mr)
+
+    def Matrix_identify(self, ml):
         ml.send_angles(self.origin_mycbot_level, 50)  # 移动到观测点
         self.wait()
         input("make sure camera can observe the stag, enter any key quit")
@@ -237,17 +265,40 @@ class camera_detect:
         pose = coords[3:6]
         print(pose)
         # self.camera_open_loop()
-        Mc1,tbe1 = self.reg_get(ml)
+        Mc1,tbe1,pos1 = self.reg_get(ml)
         ml.send_coord(1, coords[0] + 50, 30)
         self.wait()
-        Mc2,tbe2 = self.reg_get(ml)
+        Mc2,tbe2,pos2 = self.reg_get(ml)
         ml.send_coord(3, coords[2] + 20, 30)
         self.wait()
-        ml.send_coord(1, coords[0] + 20, 30)
-        self.wait()
+        Mc3,tbe3,pos3 = self.reg_get(ml)
         ml.send_coord(2, coords[1] + 20, 30)
         self.wait()
-        Mc3,tbe3 = self.reg_get(ml)
+        Mc4,tbe4,pos4 = self.reg_get(ml)
+        ml.send_coord(1, coords[0] + 20, 30)
+        self.wait()
+        Mc5,tbe5,pos5 = self.reg_get(ml)
+        tbe = np.vstack([tbe1, tbe2, tbe3, tbe4, tbe5])
+        Mc = np.vstack([Mc1, Mc2, Mc3, Mc4, Mc5])
+        state = None
+        if self.EyesInHand_matrix is not None:
+            state = True
+            pos = np.vstack([pos1, pos2, pos3, pos4, pos5])
+            r = pos.shape[0]
+            for i in range(1, r):
+                for j in range(3):
+                    err = abs(pos[i][j] - pos[0][j])
+                    if(err > 10):
+                        state = False
+                        print("matrix error")
+        return pose, tbe, Mc, state
+
+    def Eyes_in_hand_calibration(self, ml):
+        mc.set_end_type(0)
+        pose, tbe, Mc, state = self.Matrix_identify(ml)
+        if(state == True):
+            print("Calibration Complete EyesInHand_matrix = ", self.EyesInHand_matrix)
+            return
 
         input("Move the end of the robot arm to the calibration point, press any key to release servo")
         ml.release_all_servos()
@@ -260,23 +311,36 @@ class camera_detect:
         Mr = coords[0:3]
         print(Mr)
 
-        self.EyesInHand_matrix = self.eyes_in_hand_calculate(pose, tbe1, Mc1, tbe2, Mc2, tbe3, Mc3, Mr)
+
+        self.EyesInHand_matrix = self.eyes_in_hand_calculate(pose, tbe, Mc, Mr)
         print("EyesInHand_matrix = ", self.EyesInHand_matrix)
         self.save_matrix()  # Save the matrix to a file after calculating it
-        print("save successe")
+        print("save successe, wait to verify")
+
+        pose, tbe, Mc, state = self.Matrix_identify(ml)
+        if state != True:
+            self.EyesInHand_matrix = self.eyes_in_hand_calculate(pose, tbe, Mc, Mr)
+
+
+
+
     
     def reg_get(self, ml):
+        target_coords = None
         for i in range(30):
-            Mc_all = self.stag_identify()
+            Mc_all,_ = self.stag_identify()
+        if self.EyesInHand_matrix is not None:
+            target_coords,_ = self.stag_robot_identify(ml)
+
         tbe_all = ml.get_coords() # 获取机械臂当前坐标
         while (tbe_all is None):
             tbe_all = ml.get_coords()
 
-        tbe = tbe_all[0:3]
-        Mc = Mc_all[0:3]
+        tbe = np.array(tbe_all[0:3])
+        Mc = np.array(Mc_all[0:3])
         print("tbe = ", tbe)
         print("Mc = ", Mc)
-        return Mc,tbe
+        return Mc,tbe,target_coords
 
 
     def vision_trace(self, mode, ml):
@@ -288,7 +352,7 @@ class camera_detect:
             self.wait(ml)  # 等待机械臂运动结束
             input("enter any key to start trace")
             
-            target_coords = self.stag_robot_identify(ml)
+            target_coords,_ = self.stag_robot_identify(ml)
             print(target_coords)
 
             time.sleep(1)
@@ -303,23 +367,27 @@ class camera_detect:
 
         ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
         self.wait()
-        time.sleep(1)
         origin = ml.get_coords()
         while origin is None:
             origin = ml.get_coords()
+        time.sleep(1)
         while 1:
-            self.camera.update_frame()  # 刷新相机界面
-            frame = self.camera.color_frame()  # 获取当前帧
-            cv2.imshow("按下键盘任意键退出", frame)
+            _ ,ids = self.stag_identify()
+            if ids[0] == 0:
+                self.camera.update_frame()  # 刷新相机界面
+                frame = self.camera.color_frame()  # 获取当前帧
+                cv2.imshow("按下键盘任意键退出", frame)
 
-            target_coords = self.stag_robot_identify(ml)
-            target_coords[0] -= 300
-            self.coord_limit(target_coords)
-            print(target_coords)
-            for i in range(3):
-                target_coords[i+3] = origin[i+3]
-            ml.send_coords(target_coords, 30)  # 机械臂移动到二维码前方
-            # time.sleep(0.5)
+                target_coords,_ = self.stag_robot_identify(ml)
+                self.coord_limit(target_coords)
+                print(target_coords)
+                for i in range(3):
+                    target_coords[i+3] = origin[i+3]
+                ml.send_coords(target_coords, 30)  # 机械臂移动到二维码前方
+                # time.sleep(0.5)
+            elif ids[0] == 1:
+                ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
+
  
 
 if __name__ == "__main__":
@@ -327,9 +395,12 @@ if __name__ == "__main__":
     #     mc.power_on()
     camera_params = np.load("camera_params.npz")  # 相机配置文件
     mtx, dist = camera_params["mtx"], camera_params["dist"]
-    m = camera_detect(1, 32, mtx, dist)
+    m = camera_detect(0, 32, mtx, dist)
 
+    # mc.set_end_type(0)
     # m.camera_open_loop()
     # m.stag_identify_loop()
-    # m.Eyes_in_hand_calibration(mc)
-    m.vision_trace_loop(mc)
+    # m.stag_robot_identify_loop(mc)
+    # m.Test()
+    m.Eyes_in_hand_calibration(mc)
+    # m.vision_trace_loop(mc)
