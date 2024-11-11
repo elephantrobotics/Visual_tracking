@@ -105,9 +105,9 @@ class camera_detect:
         while 1:
             self.camera.update_frame()  # 刷新相机界面
             frame = self.camera.color_frame()  # 获取当前帧
-            cv2.imshow("按下键盘任意键退出", frame)
+            cv2.imshow("Enter any key to exit", frame)
             # cv2.waitKey(1)
-            # 按下键盘任意键退出
+            # Enter any key to exit
             if cv2.waitKey(1) & 0xFF != 255:
                 break
 
@@ -209,9 +209,9 @@ class camera_detect:
         while True:
             self.camera.update_frame()  # 刷新相机界面
             frame = self.camera.color_frame()  # 获取当前帧
-            cv2.imshow("按下键盘任意键退出", frame)
+            cv2.imshow("Enter any key to exit", frame)
             # cv2.waitKey(1)
-            # 按下键盘任意键退出
+            # Enter any key to exit
             if cv2.waitKey(1) & 0xFF != 255:
                 break
 
@@ -234,9 +234,9 @@ class camera_detect:
             (corners, ids, rejected_corners) = stag.detectMarkers(frame, 11)  # 获取画面中二维码的角度和id
             marker_pos_pack = self.calc_markers_base_position(corners, ids)  # 获取物的坐标(相机系)
             print("Camera coords = ", marker_pos_pack, ids)
-            cv2.imshow("按下键盘任意键退出", frame)
+            cv2.imshow("Enter any key to exit", frame)
             # cv2.waitKey(1)
-            # 按下键盘任意键退出
+            # Enter any key to exit
             if cv2.waitKey(1) & 0xFF != 255:
                 break
 
@@ -376,7 +376,7 @@ class camera_detect:
             if ids[0] == 0:
                 self.camera.update_frame()  # 刷新相机界面
                 frame = self.camera.color_frame()  # 获取当前帧
-                cv2.imshow("按下键盘任意键退出", frame)
+                cv2.imshow("Enter any key to exit", frame)
 
                 target_coords,_ = self.stag_robot_identify(ml)
                 self.coord_limit(target_coords)

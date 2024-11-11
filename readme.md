@@ -1,5 +1,15 @@
 # 视觉跟踪使用说明
 
+## 2024.11.11更新说明
+
+**修复了该识别库在树莓派系统中无法正常打开相机的问题**
+
+#### 1.删除了cv2.imshow(“输入任意键退出”，frame)中的中文输出，该使用方式会导致linux系统中相机图像无法正常显示
+
+#### 2.请根据操作系统中修改uvc_camera.py文件中的配置参数
+    self.cap = cv2.VideoCapture(self.cam_index) #linux
+    self.cap = cv2.VideoCapture(self.cam_index, cv2.CAP_DSHOW) #windows
+
 ## 2024.10.22更新说明
 #### 1.程序开头处添加了根据机器类型设置观测点offset的功能，该功能用于区分不同机器的零位，使得用户无需手动区分不同机型的观测姿态
 
@@ -71,11 +81,23 @@
 
 **以下版本确认可用**
 
+windows
+
     stag-python         1.0.1
     opencv-python       4.8.1.78
     scipy               1.11.4
     numpy               1.26.2
     pymycobot           3.6.0
+
+linux
+
+    stag-python         1.0.2
+    opencv-python       4.10.0.84
+    scipy               1.10.1
+    numpy               1.24.2
+    pymycobot           3.6.0
+
+
 #### 1.2 Stag码
 本文使用stag码用作二维码跟踪
  <div align=center><img src="resources\stag.png" width="20%" ></div>
@@ -222,7 +244,7 @@ https://blog.csdn.net/weixin_45844515/article/details/125571550
             if ids[0] == 0:
                 self.camera.update_frame()  # 刷新相机界面
                 frame = self.camera.color_frame()  # 获取当前帧
-                cv2.imshow("按下键盘任意键退出", frame)
+                cv2.imshow("Enter any key to exit", frame)
 
                 target_coords,_ = self.stag_robot_identify(ml)
                 self.coord_limit(target_coords)
