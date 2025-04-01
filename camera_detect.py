@@ -7,7 +7,8 @@ import time
 from marker_utils import *
 from scipy.linalg import svd
 from pymycobot import *
-mc = MyCobot320("COM31")  # 设置端口
+mc = MyCobot280("COM32")  # 需要手动设置端口及型号
+# mc = MyCobot320("COM32")  # 需要手动设置端口及型号
 type = mc.get_system_version()
 offset_j5 = 0
 if type > 2:
@@ -31,7 +32,7 @@ class camera_detect:
         self.camera = UVCCamera(self.camera_id, self.mtx, self.dist)
         self.camera_open()
 
-        self.origin_mycbot_horizontal = [42.36, -35.85, -52.91, 88.59, -42.62+offset_j5, 0.0]
+        self.origin_mycbot_horizontal = [42.36, -35.85, -52.91, 88.59, 90+offset_j5, 0.0]
         self.origin_mycbot_level = [-90, 5, -104, 14, 90 + offset_j5, 0]
         self.IDENTIFY_LEN = 300 #to keep identify length
    
@@ -290,7 +291,7 @@ class camera_detect:
                     err = abs(pos[i][j] - pos[0][j])
                     if(err > 10):
                         state = False
-                        print("matrix error")
+                        # print("matrix error")
         return pose, tbe, Mc, state
 
     def Eyes_in_hand_calibration(self, ml):
@@ -349,7 +350,7 @@ class camera_detect:
 
         if mode == 0:   #水平面抓取
             ml.send_angles(self.origin_mycbot_horizontal, sp)  # 移动到观测点
-            self.wait(ml)  # 等待机械臂运动结束
+            self.wait()  # 等待机械臂运动结束
             input("enter any key to start trace")
             
             target_coords,_ = self.stag_robot_identify(ml)
@@ -357,12 +358,13 @@ class camera_detect:
 
             time.sleep(1)
             ml.send_coords(target_coords, 30)  # 机械臂移动到二维码前方
-            self.wait(ml)  # 等待机械臂运动结束
+            self.wait()  # 等待机械臂运动结束
    
 
 
     def vision_trace_loop(self, ml):
         mc.set_fresh_mode(1)
+        mc.set_vision_mode(1)   #set limit
         time.sleep(1)
 
         ml.send_angles(self.origin_mycbot_horizontal, 50)  # 移动到观测点
@@ -391,16 +393,14 @@ class camera_detect:
  
 
 if __name__ == "__main__":
-    # if mc.is_power_on()==0:
-    #     mc.power_on()
     camera_params = np.load("camera_params.npz")  # 相机配置文件
     mtx, dist = camera_params["mtx"], camera_params["dist"]
-    m = camera_detect(0, 32, mtx, dist)
+    m = camera_detect(1, 32, mtx, dist)
+    mc.set_vision_mode(0)
 
-    # mc.set_end_type(0)
     # m.camera_open_loop()
     # m.stag_identify_loop()
     # m.stag_robot_identify_loop(mc)
-    # m.Test()
-    m.Eyes_in_hand_calibration(mc)
-    # m.vision_trace_loop(mc)
+    # m.Eyes_in_hand_calibration(mc)
+    # m.vision_trace(0,mc)
+    m.vision_trace_loop(mc)
